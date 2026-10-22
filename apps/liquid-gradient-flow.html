@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Liquid Gradient Flow — Video Maker</title>
+<style>
+:root{--bg:#0d0e12;--panel:#15171d;--line:#252936;--txt:#e8eaf0;--dim:#8b92a5;--acc:#7c9cff}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);font:13px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+#app{display:grid;grid-template-columns:minmax(0,1fr) 350px;height:100%}
+#stage{display:flex;flex-direction:column;min-width:0;min-height:0}
+#view{flex:1;display:flex;align-items:center;justify-content:center;padding:18px;min-height:0}
+#cv{max-width:100%;max-height:100%;background:#000;border-radius:6px;box-shadow:0 10px 50px #000a}
+#bar{display:flex;gap:10px;align-items:center;padding:10px 18px 14px;border-top:1px solid var(--line)}
+#bar button{width:38px;height:32px}
+#scrub{flex:1;min-width:0}
+#hud{color:var(--dim);font-variant-numeric:tabular-nums;white-space:nowrap;font-size:12px}
+#panel{background:var(--panel);border-left:1px solid var(--line);overflow:auto}
+#panel h1{font-size:14px;margin:0;padding:14px 14px 4px}
+#panel .sub{color:var(--dim);padding:0 14px 10px;font-size:12px}
+details{border-top:1px solid var(--line)}
+summary{cursor:pointer;padding:10px 14px;font-weight:600;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#b9c0d4;user-select:none}
+.row{padding:5px 14px;display:grid;grid-template-columns:1fr auto;gap:2px 10px;align-items:center}
+.row[hidden]{display:none}
+.row label{color:var(--dim)}
+.row output{font-variant-numeric:tabular-nums;color:var(--txt)}
+.row input[type=range],.row select,.row input[type=text],.row input[type=number].wide{grid-column:1/-1;width:100%}
+.row.two{grid-template-columns:1fr 1fr}
+input,select,button{font:inherit;color:var(--txt);background:#1d2029;border:1px solid var(--line);border-radius:6px;padding:6px 8px}
+input[type=range]{padding:0;accent-color:var(--acc);height:22px;background:none;border:0}
+input[type=color]{padding:0;width:44px;height:26px;border:1px solid var(--line);background:none}
+button{cursor:pointer}button:hover{border-color:var(--acc)}
+button.primary{background:var(--acc);border-color:var(--acc);color:#0b0d14;font-weight:600}
+.btns{display:flex;flex-wrap:wrap;gap:8px;padding:8px 14px}
+.btns>*{flex:1 1 auto}
+.note{padding:6px 14px 14px;color:var(--dim);font-size:12px}
+#toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:#222736;border:1px solid var(--line);padding:8px 14px;border-radius:8px;opacity:0;transition:opacity .2s;pointer-events:none}
+#toast.on{opacity:1}
+@media(max-width:820px){
+ #app{grid-template-columns:1fr;grid-template-rows:auto auto;height:auto}
+ #view{flex:none;padding:10px}#cv{width:100%;height:auto}
+ #bar{flex-wrap:wrap;padding:10px 12px}#scrub{order:5;flex:1 1 100%}
+ #panel{border-left:0;border-top:1px solid var(--line);overflow:visible}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <div id="view"><canvas id="cv" width="960" height="540"></canvas></div>
+    <div id="bar">
+      <button id="play" title="Play / pause (Space)">❚❚</button>
+      <input id="scrub" type="range" min="0" max="299" value="0">
+      <span id="hud"></span>
+      <select id="pq" title="Preview quality only — the final render is always full resolution">
+        <option value="270">Preview 270p</option><option value="360">360p</option>
+        <option value="540" selected>540p</option><option value="720">720p</option>
+      </select>
+    </div>
+  </div>
+  <div id="panel">
+    <h1 id="ttl"></h1>
+    <div class="sub">Preview only. Tweak, then download the job JSON and upload it to your GitHub repo's <b>jobs/</b> folder.</div>
+    <div id="controls"></div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<!-- =====================================================================
+     VIDEO SCRIPT  —  the ONLY part an AI coder writes for a new video type.
+     Contract:  const VIDEO = { id, title, file, defaults, schema, presets, draw }
+     ===================================================================== -->
+<script id="VIDEO">
+const VIDEO = (() => {
+  const TAU = Math.PI * 2;
+
+  // palette = [background, c1, c2, c3, c4]
+  const PAL = {
+    aurora:   ['#050816', '#00f5a0', '#00d9f5', '#7b61ff', '#ff5ccf'],
+    sunset:   ['#14070f', '#ff5e5b', '#ffb347', '#ff3d81', '#8a3cff'],
+    ocean:    ['#020b1a', '#00b4d8', '#48cae4', '#0077b6', '#90e0ef'],
+    ember:    ['#0e0505', '#ff3b1f', '#ff8a00', '#ffd166', '#b5179e'],
+    vapor:    ['#0a0614', '#ff71ce', '#01cdfe', '#b967ff', '#05ffa1'],
+    gold:     ['#070605', '#f5c76a', '#c9892b', '#fff1c9', '#8a5a14'],
+    forest:   ['#04100b', '#2ec27e', '#a3e635', '#0f766e', '#facc15'],
+    silver:   ['#07080b', '#e5e9f2', '#9aa3b8', '#5b6479', '#ffffff'],
+    pastel:   ['#f6f1ea', '#ffb5a7', '#a0c4ff', '#bdb2ff', '#caffbf'],
+    candy:    ['#fff4f8', '#ff7eb6', '#7afcff', '#feff9c', '#b28dff']
+  };
+
+  return {
+    id: 'liquid-gradient-flow',
+    title: 'Liquid Gradient Flow',
+    file: 'liquid-gradient-flow.html',      // must equal this file's name (goes into the job JSON)
+    defaults: { duration: 10, fps: 30, width: 3840, height: 2160, crf: 14 },
+
+    schema: [
+      // ---- Look
+      {key:'mode',    label:'Style',   type:'select', group:'Look', default:'blobs',
+        options:[['blobs','Liquid blobs'],['ribbons','Silk ribbons'],['rings','Neon rings']]},
+      {key:'palette', label:'Palette', type:'select', group:'Look', default:'aurora',
+        options:Object.keys(PAL).map(k => [k, k[0].toUpperCase()+k.slice(1)])},
+      {key:'blend',   label:'Blend',   type:'select', group:'Look', default:'lighter',
+        options:[['lighter','Additive (glow)'],['screen','Screen (soft)'],['source-over','Normal (flat)']]},
+      {key:'useCustom', label:'Custom colors', type:'checkbox', group:'Look', default:false, rand:false},
+      {key:'bg', label:'Background', type:'color', group:'Look', default:'#050816', showIf:P=>P.useCustom, rand:false},
+      {key:'c1', label:'Color 1', type:'color', group:'Look', default:'#00f5a0', showIf:P=>P.useCustom, rand:false},
+      {key:'c2', label:'Color 2', type:'color', group:'Look', default:'#00d9f5', showIf:P=>P.useCustom, rand:false},
+      {key:'c3', label:'Color 3', type:'color', group:'Look', default:'#7b61ff', showIf:P=>P.useCustom, rand:false},
+      {key:'c4', label:'Color 4', type:'color', group:'Look', default:'#ff5ccf', showIf:P=>P.useCustom, rand:false},
+      // ---- Shapes
+      {key:'count', label:'Shape count', type:'range', group:'Shapes', min:3, max:16, step:1, default:9},
+      {key:'size',  label:'Shape size',  type:'range', group:'Shapes', min:.3, max:2, step:.01, default:1},
+      {key:'soft',  label:'Softness',    type:'range', group:'Shapes', min:.1, max:1, step:.01, default:.6},
+      // ---- Motion (cycles are whole numbers so the video loops seamlessly)
+      {key:'cycles', label:'Motion cycles per video', type:'range', group:'Motion', min:1, max:4, step:1, default:1},
+      {key:'amp',    label:'Movement range', type:'range', group:'Motion', min:.1, max:1.5, step:.01, default:.8},
+      {key:'wobble', label:'Wobble',         type:'range', group:'Motion', min:0, max:1, step:.01, default:.4},
+      {key:'breath', label:'Camera breathing', type:'range', group:'Motion', min:0, max:.3, step:.005, default:.05},
+      // ---- Details
+      {key:'rays',        label:'Light rays',     type:'range', group:'Details', min:0, max:1, step:.01, default:.3},
+      {key:'bokeh',       label:'Bokeh count',    type:'range', group:'Details', min:0, max:120, step:1, default:36},
+      {key:'bokehSize',   label:'Bokeh size',     type:'range', group:'Details', min:.2, max:2.5, step:.01, default:1},
+      {key:'bokehOpacity',label:'Bokeh opacity',  type:'range', group:'Details', min:0, max:1, step:.01, default:.5}
+    ],
+
+    presets: {
+      'Aurora Silk':    {mode:'ribbons', palette:'aurora', blend:'lighter', count:7, size:1.1, soft:.6, cycles:1, amp:.9, wobble:.5, rays:.35, bokeh:30},
+      'Sunset Liquid':  {mode:'blobs',   palette:'sunset', blend:'lighter', count:10, size:1.15, soft:.7, cycles:1, amp:.8, wobble:.4, rays:.25, bokeh:40},
+      'Ocean Rings':    {mode:'rings',   palette:'ocean',  blend:'lighter', count:8, size:.9, soft:.6, cycles:1, amp:.6, wobble:.5, rays:.4, bokeh:24},
+      'Ember Flow':     {mode:'blobs',   palette:'ember',  blend:'lighter', count:12, size:1.3, soft:.75, cycles:2, amp:1.0, wobble:.6, rays:.15, bokeh:60, bokehSize:.8},
+      'Vapor Neon':     {mode:'rings',   palette:'vapor',  blend:'lighter', count:10, size:1.2, soft:.5, cycles:2, amp:.7, wobble:.8, rays:.5, bokeh:50},
+      'Gold Noir':      {mode:'ribbons', palette:'gold',   blend:'screen',  count:5, size:.9, soft:.5, cycles:1, amp:.6, wobble:.3, rays:.45, bokeh:70, bokehSize:.7, grain:.3, vignette:.55},
+      'Forest Mist':    {mode:'blobs',   palette:'forest', blend:'screen',  count:8, size:1.4, soft:.85, cycles:1, amp:.6, wobble:.3, rays:.5, bokeh:34, bokehOpacity:.35},
+      'Mono Silver':    {mode:'ribbons', palette:'silver', blend:'screen',  count:9, size:.8, soft:.55, cycles:1, amp:.7, wobble:.35, rays:.2, bokeh:20, bloom:.35},
+      'Pastel Dream':   {mode:'blobs',   palette:'pastel', blend:'source-over', count:9, size:1.3, soft:.8, cycles:1, amp:.7, wobble:.35, rays:0, bokeh:0, bloom:.1, vignette:.1, grain:.14},
+      'Candy Pop':      {mode:'blobs',   palette:'candy',  blend:'source-over', count:7, size:1.2, soft:.65, cycles:2, amp:.85, wobble:.5, rays:0, bokeh:14, bokehOpacity:.6, bloom:.12, vignette:.08, grain:.14}
+    },
+
+    /**
+     * draw(ctx, w, h, T, P, H)  — MUST be a pure function of (T, P).
+     *   T = { frame, frames, fps, duration, t, phase (0..1, loops), u (= h/1080) , w, h }
+     *   P = current parameter values;   H = helpers (rng, clamp, lerp, smooth, hex, rgba, mix, TAU)
+     */
+    draw(ctx, w, h, T, P, H) {
+      const u = T.u, ph = T.phase, cyc = P.cycles;
+      const pal = P.useCustom ? [P.bg, P.c1, P.c2, P.c3, P.c4] : PAL[P.palette];
+      const bg = pal[0], cols = pal.slice(1), nC = cols.length;
+      const frac = x => x - Math.floor(x);
+
+      // ---- background with a slowly drifting glow
+      ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h);
+      const ba = TAU * ph * cyc;
+      const bgg = ctx.createRadialGradient(w*(.5+.18*Math.cos(ba)), h*(.5+.18*Math.sin(ba)), 0, w/2, h/2, Math.hypot(w, h)*.62);
+      bgg.addColorStop(0, H.rgba(H.mix(bg, cols[0], .2), 1));
+      bgg.addColorStop(1, H.rgba(bg, 1));
+      ctx.fillStyle = bgg; ctx.fillRect(0, 0, w, h);
+
+      // ---- camera breathing (loops: sin over one full period)
+      ctx.save();
+      const z = 1 + P.breath * Math.sin(TAU * ph);
+      ctx.translate(w/2, h/2); ctx.scale(z, z); ctx.translate(-w/2, -h/2);
+
+      ctx.globalCompositeOperation = P.blend;
+      const r = H.rng(P.seed);
+
+      if (P.mode === 'blobs') {
+        for (let i = 0; i < P.count; i++) {
+          const k1 = 1 + Math.floor(r()*3), k2 = 1 + Math.floor(r()*3);
+          const p1 = r()*TAU, p2 = r()*TAU, bx = .12 + r()*.76, by = .12 + r()*.76, rs = r();
+          const a1 = TAU*ph*cyc*k1 + p1, a2 = TAU*ph*cyc*k2 + p2;
+          const x = w * (bx + .22*P.amp*Math.sin(a1) + .06*P.wobble*Math.sin(a2*2 + p1));
+          const y = h * (by + .22*P.amp*Math.cos(a2) + .06*P.wobble*Math.cos(a1*2 + p2));
+          const R = u * (200 + 380*rs) * P.size * (1 + .14*P.wobble*Math.sin(a2));
+          const col = cols[i % nC];
+          ctx.save();
+          ctx.translate(x, y); ctx.rotate(a1); ctx.scale(1, .62 + .38*(.5 + .5*Math.sin(a2)));
+          const g = ctx.createRadialGradient(0, 0, 0, 0, 0, R);
+          const ka = P.blend === 'lighter' ? .66 : 1;          // additive stacks up fast, so tame it
+          g.addColorStop(0, H.rgba(col, .85*ka));
+          g.addColorStop(.25 + .35*(1 - P.soft), H.rgba(col, .45*ka));
+          g.addColorStop(1, H.rgba(col, 0));
+          ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, R, 0, TAU); ctx.fill();
+          ctx.restore();
+        }
+      } else if (P.mode === 'ribbons') {
+        const step = Math.max(6, w/110);
+        for (let i = 0; i < P.count; i++) {
+          const k1 = 1 + Math.floor(r()*3), k2 = 1 + Math.floor(r()*3), k3 = 1 + Math.floor(r()*2);
+          const p1 = r()*TAU, p2 = r()*TAU, p3 = r()*TAU;
+          const f1 = TAU*(.5 + r()*1.1)/w, f2 = TAU*(1 + r()*1.6)/w, f3 = TAU*(.4 + r()*.9)/w;
+          const a1 = TAU*ph*cyc*k1 + p1, a2 = TAU*ph*cyc*k2 + p2, a3 = TAU*ph*cyc*k3 + p3;
+          const yb = h * (.12 + .76 * (i + .5) / P.count) + h*.06*P.amp*Math.sin(a3);
+          const A = u * 150 * P.amp, th = u * (50 + 150*P.size*(.5 + .5*r()));
+          const top = [], bot = [];
+          for (let x = -step*2; x <= w + step*2; x += step) {
+            const yy = yb + A*(Math.sin(x*f1 + a1) + P.wobble*.55*Math.sin(x*f2 + a2));
+            const tt = th * (.55 + .45*Math.sin(x*f3 + a3));
+            top.push([x, yy - tt/2]); bot.push([x, yy + tt/2]);
+          }
+          const c1 = cols[i % nC], c2 = cols[(i + 1) % nC];
+          const g = ctx.createLinearGradient(0, 0, w, 0);
+          g.addColorStop(0, H.rgba(c1, 0)); g.addColorStop(.2, H.rgba(c1, .5 + .2*P.soft));
+          g.addColorStop(.8, H.rgba(c2, .5 + .2*P.soft)); g.addColorStop(1, H.rgba(c2, 0));
+          ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(top[0][0], top[0][1]);
+          for (const p of top) ctx.lineTo(p[0], p[1]);
+          for (let j = bot.length - 1; j >= 0; j--) ctx.lineTo(bot[j][0], bot[j][1]);
+          ctx.closePath(); ctx.fill();
+        }
+      } else { // rings
+        const cx0 = w/2 + w*.04*P.amp*Math.sin(TAU*ph), cy0 = h/2 + h*.04*P.amp*Math.cos(TAU*ph);
+        const Rmax = Math.hypot(w, h) * .42;
+        for (let i = 0; i < P.count; i++) {
+          const k = 1 + Math.floor(r()*2), p1 = r()*TAU, p2 = r()*TAU;
+          const f = frac(i / P.count + ph*cyc);                       // 0..1 expanding, loops
+          const fade = Math.pow(Math.sin(Math.PI*f), 1.4);
+          const a1 = TAU*ph*cyc*k + p1, a2 = TAU*ph*cyc*k + p2;
+          const R = Rmax * (.05 + .95*f);
+          const rx = R * (1 + .08*P.wobble*Math.sin(a1)), ry = R * (.8 + .2*Math.cos(a2)) ;
+          const col = cols[i % nC], lw = u * (5 + 34*P.size*f);
+          ctx.save(); ctx.translate(cx0, cy0); ctx.rotate(a1*.5);
+          for (const [wMul, al] of [[3.2, .06 + .1*P.soft], [1.6, .16 + .12*P.soft], [.5, .8]]) {
+            ctx.lineWidth = lw * wMul * (wMul < 1 ? .35 : 1); ctx.strokeStyle = H.rgba(col, al*fade);
+            ctx.beginPath(); ctx.ellipse(0, 0, rx, ry, 0, 0, TAU); ctx.stroke();
+          }
+          ctx.restore();
+        }
+      }
+
+      // ---- light rays
+      if (P.rays > 0) {
+        ctx.globalCompositeOperation = 'screen';
+        for (let i = 0; i < 3; i++) {
+          const a = -.55 + .27*i + .12*Math.sin(TAU*ph + i*2.1);
+          const bw = u * (240 + 130*i);
+          ctx.save(); ctx.translate(w*(.18 + .3*i), -h*.15); ctx.rotate(a);
+          const g = ctx.createLinearGradient(-bw, 0, bw, 0);
+          const col = cols[i % nC];
+          g.addColorStop(0, H.rgba(col, 0)); g.addColorStop(.5, H.rgba(col, .2*P.rays)); g.addColorStop(1, H.rgba(col, 0));
+          ctx.fillStyle = g; ctx.fillRect(-bw, 0, bw*2, h*1.7); ctx.restore();
+        }
+      }
+
+      // ---- bokeh dust (drifts up exactly 1–2 screens per loop so it closes seamlessly)
+      if (P.bokeh > 0 && P.bokehOpacity > 0) {
+        ctx.globalCompositeOperation = 'screen';
+        const r2 = H.rng((P.seed ^ 0x9e3779b9) >>> 0);
+        for (let i = 0; i < P.bokeh; i++) {
+          const x0 = r2(), y0 = r2(), s = .25 + .75*r2(), m = 1 + Math.floor(r2()*2), k = 1 + Math.floor(r2()*2), p = r2()*TAU, ci = Math.floor(r2()*nC);
+          const y = -.1 + 1.2 * frac(y0 - ph*cyc*m);
+          const x = x0 + .03*Math.sin(TAU*ph*k + p);
+          const rad = u * (10 + 52*s) * P.bokehSize;
+          const tw = .3 + .7*(.5 + .5*Math.sin(TAU*ph*k*2 + p));
+          const al = tw * P.bokehOpacity * (.25 + .75*s);
+          const col = H.mix(cols[ci], '#ffffff', .45);
+          const g = ctx.createRadialGradient(w*x, h*y, 0, w*x, h*y, rad);
+          g.addColorStop(0, H.rgba(col, al*.55)); g.addColorStop(.8, H.rgba(col, al*.75)); g.addColorStop(1, H.rgba(col, 0));
+          ctx.fillStyle = g; ctx.beginPath(); ctx.arc(w*x, h*y, rad, 0, TAU); ctx.fill();
+        }
+      }
+      ctx.restore();
+    }
+  };
+})();
+</script>
+
+<!-- =====================================================================
+     FRAMEWORK SCRIPT  v1  —  DO NOT EDIT. Copy verbatim into every new app.
+     Provides: UI builder, preview, finishing (bloom / vignette / grain),
+     job JSON export/import, and the VIDEO_API the Python renderer calls.
+     ===================================================================== -->
+<script id="FRAMEWORK">
+(() => {
+'use strict';
+const RENDER = /[?&]render=1/.test(location.search);
+const $ = (s, r = document) => r.querySelector(s);
+const TAU = Math.PI * 2;
+
+// ---------- helpers handed to VIDEO.draw ----------
+const H = {
+  TAU,
+  clamp: (v, a, b) => Math.min(b, Math.max(a, v)),
+  lerp: (a, b, t) => a + (b - a) * t,
+  smooth: (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); },
+  // seeded PRNG (mulberry32) — NEVER use Math.random inside draw()
+  rng(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ t >>> 15, t | 1); t ^= t + Math.imul(t ^ t >>> 7, t | 61); return ((t ^ t >>> 14) >>> 0) / 4294967296; }; },
+  hex(h) { h = h.replace('#', ''); if (h.length === 3) h = h.split('').map(c => c + c).join(''); const n = parseInt(h, 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; },
+  rgba(h, a = 1) { const c = H.hex(h); return `rgba(${c[0]},${c[1]},${c[2]},${a})`; },
+  mix(h1, h2, t) { const a = H.hex(h1), b = H.hex(h2); return '#' + a.map((v, i) => Math.round(v + (b[i] - v) * t).toString(16).padStart(2, '0')).join(''); }
+};
+
+// ---------- finishing controls shared by every video ----------
+const FINISH = [
+  {key:'bloom',    label:'Bloom / glow',     type:'range', group:'Film & Finish', min:0, max:1, step:.01, default:.22, rand:false},
+  {key:'vignette', label:'Vignette',         type:'range', group:'Film & Finish', min:0, max:1, step:.01, default:.35, rand:false},
+  {key:'grain',    label:'Film grain',       type:'range', group:'Film & Finish', min:0, max:1, step:.01, default:.16, rand:false},
+  {key:'grainSize',label:'Grain size',       type:'range', group:'Film & Finish', min:.5, max:3, step:.05, default:.8, rand:false},
+  {key:'grainChroma',label:'Grain color',    type:'range', group:'Film & Finish', min:0, max:1, step:.01, default:.15, rand:false}
+];
+const SCHEMA = [...VIDEO.schema, ...FINISH];
+const RES = [['3840x2160','4K UHD 3840×2160 (16:9)'],['4096x2160','DCI 4K 4096×2160'],['1920x1080','Full HD 1920×1080'],
+             ['2160x3840','Vertical 4K 2160×3840 (9:16)'],['1080x1920','Vertical HD 1080×1920'],['2160x2160','Square 2160×2160']];
+const QUAL = [[12,'Ultra  (CRF 12, biggest file)'],[14,'High  (CRF 14, recommended)'],[18,'Balanced  (CRF 18)']];
+
+const defaultsOf = () => { const d = { seed: 1234 }; SCHEMA.forEach(c => d[c.key] = c.default); return d; };
+const DEF_OUT = Object.assign({ width: 3840, height: 2160, fps: 30, duration: 10, crf: 14 }, VIDEO.defaults);
+let P = defaultsOf(), OUT = Object.assign({}, DEF_OUT), NAME = VIDEO.id;
+const nFrames = () => Math.max(1, Math.round(OUT.duration * OUT.fps));
+
+// ---------- finishing passes (identical in preview and final render) ----------
+let bloomCv = null, grainCv = null, grainId = null;
+function bloom(ctx, w, h, amt) {
+  if (amt <= 0 || !('filter' in ctx)) return;
+  const sw = Math.max(16, Math.round(w / 4)), sh = Math.max(9, Math.round(h / 4));
+  if (!bloomCv) bloomCv = document.createElement('canvas');
+  if (bloomCv.width !== sw || bloomCv.height !== sh) { bloomCv.width = sw; bloomCv.height = sh; }
+  const b = bloomCv.getContext('2d');
+  b.globalCompositeOperation = 'copy'; b.imageSmoothingQuality = 'high';
+  b.filter = `blur(${(sw * 0.012).toFixed(2)}px)`; b.drawImage(ctx.canvas, 0, 0, sw, sh); b.filter = 'none';
+  ctx.save(); ctx.globalCompositeOperation = 'screen'; ctx.globalAlpha = Math.min(1, amt); ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(bloomCv, 0, 0, w, h); ctx.restore();
+}
+function vignette(ctx, w, h, amt) {
+  if (amt <= 0) return;
+  const g = ctx.createRadialGradient(w/2, h/2, Math.min(w, h)*.28, w/2, h/2, Math.hypot(w, h)*.54);
+  g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(.6, `rgba(0,0,0,${amt*.22})`); g.addColorStop(1, `rgba(0,0,0,${amt})`);
+  ctx.save(); ctx.globalCompositeOperation = 'source-over'; ctx.fillStyle = g; ctx.fillRect(0, 0, w, h); ctx.restore();
+}
+function grain(ctx, w, h, frame, amt, size, chroma, seed) {
+  if (amt <= 0) return;
+  const gs = Math.max(1, size * h / 1080);                 // grain cell in output pixels (scales with resolution)
+  const gw = Math.ceil(w / gs), gh = Math.ceil(h / gs);
+  if (!grainCv || grainCv.width !== gw || grainCv.height !== gh) {
+    grainCv = document.createElement('canvas'); grainCv.width = gw; grainCv.height = gh;
+    grainId = grainCv.getContext('2d').createImageData(gw, gh);
+  }
+  // inline xorshift32 (deterministic, seeded by seed+frame) — ~10x faster than a closure PRNG at 4K
+  const d = grainId.data, cc = chroma * 0.86;
+  let x = (((seed * 2654435761) ^ ((frame + 1) * 40503)) | 0) || 1;
+  for (let k = 0; k < 12; k++) { x ^= x << 13; x ^= x >>> 17; x ^= x << 5; }
+  for (let i = 0; i < d.length; i += 4) {
+    x ^= x << 13; x ^= x >>> 17; x ^= x << 5;
+    const v = 128 + (((x & 255) + ((x >>> 8) & 255) + ((x >>> 16) & 255)) / 3 - 127.5) * 1.65;   // ~gaussian luma
+    x ^= x << 13; x ^= x >>> 17; x ^= x << 5;
+    d[i] = v + ((x & 255) - 127.5) * cc; d[i+1] = v + (((x >>> 8) & 255) - 127.5) * cc; d[i+2] = v + (((x >>> 16) & 255) - 127.5) * cc; d[i+3] = 255;
+  }
+  grainCv.getContext('2d').putImageData(grainId, 0, 0);
+  ctx.save(); ctx.globalCompositeOperation = 'overlay'; ctx.globalAlpha = Math.min(1, amt);
+  ctx.imageSmoothingEnabled = gs > 1.01; ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(grainCv, 0, 0, gw * gs, gh * gs); ctx.restore();
+}
+
+// ---------- the one function both preview and renderer use ----------
+function renderTo(canvas, frame) {
+  const w = canvas.width, h = canvas.height, ctx = canvas.getContext('2d');
+  const frames = nFrames();
+  const T = { frame, frames, fps: OUT.fps, duration: OUT.duration, t: frame / OUT.fps, phase: (frame % frames) / frames, u: h / 1080, w, h };
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.filter = 'none';
+  VIDEO.draw(ctx, w, h, T, P, H);
+  ctx.restore();
+  bloom(ctx, w, h, P.bloom); vignette(ctx, w, h, P.vignette);
+  grain(ctx, w, h, frame, P.grain, P.grainSize, P.grainChroma, P.seed);
+}
+
+// ---------- UI ----------
+const cv = $('#cv'), closed = new Set();
+let playing = true, frame = 0, t0 = performance.now(), dirty = true, lastDrawn = -1, drawMs = 0;
+let prevH = window.innerWidth < 820 ? 360 : 540;
+
+const el = (tag, attrs = {}) => { const e = document.createElement(tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; };
+const toast = m => { const t = $('#toast'); t.textContent = m; t.classList.add('on'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('on'), 2200); };
+const fmt = (c, v) => { const s = c.step || .01, dec = s >= 1 ? 0 : s >= .1 ? 1 : s >= .01 ? 2 : 3; return (+v).toFixed(dec); };
+const slug = s => (s || 'video').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'video';
+
+function refreshVis() { document.querySelectorAll('.row').forEach(r => { if (r._c && r._c.showIf) r.hidden = !r._c.showIf(P); }); }
+
+function addControl(parent, c) {
+  const row = el('div', { class: 'row' }), id = 'c_' + c.key; row._c = c;
+  const lab = el('label', { for: id }); lab.textContent = c.label; row.append(lab);
+  let inp, out;
+  const set = v => { P[c.key] = v; dirty = true; refreshVis(); if (out) out.textContent = fmt(c, v); };
+  if (c.type === 'range') {
+    out = el('output'); out.textContent = fmt(c, P[c.key]); row.append(out);
+    inp = el('input', { type: 'range', id, min: c.min, max: c.max, step: c.step || .01, value: P[c.key] }); inp.oninput = () => set(+inp.value);
+  } else if (c.type === 'color') {
+    inp = el('input', { type: 'color', id }); inp.value = P[c.key]; inp.oninput = () => set(inp.value);
+  } else if (c.type === 'checkbox') {
+    inp = el('input', { type: 'checkbox', id }); inp.checked = !!P[c.key]; inp.onchange = () => set(inp.checked);
+  } else {
+    inp = el('select', { id });
+    c.options.forEach(o => { const [v, l] = Array.isArray(o) ? o : [o, o]; const op = el('option', { value: v }); op.textContent = l; inp.append(op); });
+    inp.value = P[c.key]; inp.onchange = () => set(inp.value);
+  }
+  row.append(inp); parent.append(row);
+}
+
+function group(title) {
+  const d = el('details'); if (!closed.has(title)) d.open = true;
+  d.ontoggle = () => { d.open ? closed.delete(title) : closed.add(title); };
+  const s = el('summary'); s.textContent = title; d.append(s); $('#controls').append(d); return d;
+}
+
+function field(parent, label, node, cls = '') { const r = el('div', { class: 'row ' + cls }); const l = el('label'); l.textContent = label; r.append(l, node); parent.append(r); return r; }
+
+function buildUI() {
+  const host = $('#controls'); host.innerHTML = ''; $('#ttl').textContent = VIDEO.title;
+
+  // presets & randomize
+  let g = group('Presets');
+  const ps = el('select'); ps.append(Object.assign(el('option', { value: '' }), { textContent: 'Choose a preset…' }));
+  Object.keys(VIDEO.presets || {}).forEach(k => { const o = el('option', { value: k }); o.textContent = k; ps.append(o); });
+  ps.onchange = () => { if (ps.value) { applyPreset(ps.value); } };
+  const pr = el('div', { class: 'row' }); pr.append(ps); ps.style.gridColumn = '1/-1'; g.append(pr);
+  const b = el('div', { class: 'btns' });
+  const bR = el('button'); bR.textContent = '🎲 Randomize look'; bR.onclick = randomize;
+  const bD = el('button'); bD.textContent = 'Reset'; bD.onclick = () => { P = defaultsOf(); buildUI(); dirty = true; };
+  b.append(bR, bD); g.append(b);
+
+  // video controls grouped
+  const groups = {}; SCHEMA.forEach(c => (groups[c.group || 'General'] = groups[c.group || 'General'] || []).push(c));
+  for (const name in groups) { const d = group(name); groups[name].forEach(c => addControl(d, c)); }
+
+  // output settings
+  g = group('Output (final video)');
+  const nm = el('input', { type: 'text', value: NAME }); nm.oninput = () => NAME = nm.value; field(g, 'Name', nm).querySelector('input').style.gridColumn = '1/-1';
+  const rs = el('select'); RES.forEach(([v, l]) => { const o = el('option', { value: v }); o.textContent = l; rs.append(o); });
+  rs.value = OUT.width + 'x' + OUT.height; if (rs.value !== OUT.width + 'x' + OUT.height) { const o = el('option', { value: OUT.width + 'x' + OUT.height }); o.textContent = OUT.width + '×' + OUT.height; rs.append(o); rs.value = o.value; }
+  rs.onchange = () => { const [w, h] = rs.value.split('x').map(Number); OUT.width = w; OUT.height = h; resizePreview(); dirty = true; };
+  field(g, 'Resolution', rs).querySelector('select').style.gridColumn = '1/-1';
+  const fp = el('select'); [24, 25, 30, 60].forEach(v => { const o = el('option', { value: v }); o.textContent = v + ' fps'; fp.append(o); }); fp.value = OUT.fps;
+  fp.onchange = () => { OUT.fps = +fp.value; syncScrub(); setFrame(0); }; field(g, 'Frame rate', fp);
+  const du = el('input', { type: 'number', min: 2, max: 120, step: .5, value: OUT.duration, style: 'width:90px' });
+  du.onchange = () => { OUT.duration = H.clamp(+du.value || 10, 2, 120); du.value = OUT.duration; syncScrub(); setFrame(0); }; field(g, 'Duration (seconds)', du);
+  const sd = el('input', { type: 'number', min: 0, max: 2147483647, step: 1, value: P.seed, style: 'width:120px' });
+  sd.onchange = () => { P.seed = Math.max(0, Math.floor(+sd.value || 0)); dirty = true; }; field(g, 'Seed (changes the layout)', sd);
+  const ql = el('select'); QUAL.forEach(([v, l]) => { const o = el('option', { value: v }); o.textContent = l; ql.append(o); }); ql.value = OUT.crf;
+  ql.onchange = () => OUT.crf = +ql.value; field(g, 'Quality', ql).querySelector('select').style.gridColumn = '1/-1';
+  g.append(Object.assign(el('div', { class: 'note' }), { textContent: 'Whole-number "motion cycles" + this duration give a seamless loop. Grain preview is approximate; the final render is pixel-exact at the chosen resolution.' }));
+
+  // export
+  g = group('Export job');
+  const eb = el('div', { class: 'btns' });
+  const bDl = el('button', { class: 'primary' }); bDl.textContent = '⬇ Download job JSON'; bDl.onclick = downloadJob;
+  const bCp = el('button'); bCp.textContent = 'Copy JSON'; bCp.onclick = () => { const t = JSON.stringify(makeJob(), null, 2); (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(() => toast('JSON copied'), () => toast('Copy blocked — use Download')); };
+  const bLd = el('button'); bLd.textContent = 'Load JSON…'; bLd.onclick = () => $('#file').click();
+  eb.append(bDl, bCp, bLd); g.append(eb);
+  g.append(Object.assign(el('div', { class: 'note' }), { textContent: 'Upload the downloaded file to the jobs/ folder of your GitHub repo — the render starts automatically.' }));
+  refreshVis();
+}
+
+function applyPreset(name) {
+  const keepSeed = P.seed; P = Object.assign(defaultsOf(), VIDEO.presets[name]); if (!('seed' in VIDEO.presets[name])) P.seed = keepSeed;
+  NAME = slug(VIDEO.id + '-' + name); buildUI(); dirty = true; toast('Preset: ' + name);
+}
+function hsl2hex(h, s, l) { s /= 100; l /= 100; const k = n => (n + h / 30) % 12, a = s * Math.min(l, 1 - l), f = n => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1))); return '#' + [f(0), f(8), f(4)].map(v => Math.round(v * 255).toString(16).padStart(2, '0')).join(''); }
+function randomize() {
+  SCHEMA.forEach(c => {
+    if (c.rand === false) return;
+    if (c.type === 'range') { const st = c.step || .01; P[c.key] = H.clamp(+(Math.round((c.min + Math.random() * (c.max - c.min)) / st) * st).toFixed(4), c.min, c.max); }
+    else if (c.type === 'select') { const o = c.options[Math.floor(Math.random() * c.options.length)]; P[c.key] = Array.isArray(o) ? o[0] : o; }
+    else if (c.type === 'color') P[c.key] = hsl2hex(Math.random() * 360, 60 + Math.random() * 35, 45 + Math.random() * 15);
+  });
+  P.seed = Math.floor(Math.random() * 1e9); buildUI(); dirty = true;
+}
+
+// ---------- job JSON ----------
+function makeJob() {
+  const params = {}; Object.keys(defaultsOf()).forEach(k => params[k] = P[k]);
+  return { schema: 'html-video-job/1', app: VIDEO.file, name: slug(NAME), created: new Date().toISOString(), output: Object.assign({}, OUT), params };
+}
+function downloadJob() {
+  const blob = new Blob([JSON.stringify(makeJob(), null, 2)], { type: 'application/json' });
+  const a = el('a', { href: URL.createObjectURL(blob), download: slug(NAME) + '.json' }); document.body.append(a); a.click(); a.remove();
+  toast('Saved ' + slug(NAME) + '.json');
+}
+function applyJob(job) {
+  P = Object.assign(defaultsOf(), job.params || {});
+  OUT = Object.assign({}, DEF_OUT, job.output || {});
+  NAME = job.name || NAME; buildUI(); resizePreview(); syncScrub(); setFrame(0); dirty = true;
+}
+const fileIn = el('input', { type: 'file', id: 'file', accept: '.json,application/json', style: 'display:none' }); document.body.append(fileIn);
+fileIn.onchange = async () => {
+  try { const job = JSON.parse(await fileIn.files[0].text()); if (job.schema !== 'html-video-job/1') throw 0;
+    if (job.app && job.app !== VIDEO.file) toast('Note: this job was made for ' + job.app); applyJob(job); }
+  catch (e) { toast('Not a valid job JSON'); } fileIn.value = '';
+};
+
+// ---------- preview loop ----------
+function resizePreview() { cv.height = prevH; cv.width = Math.round(prevH * OUT.width / OUT.height); dirty = true; }
+function syncScrub() { const s = $('#scrub'); s.max = nFrames() - 1; }
+function setFrame(f) { const n = nFrames(); frame = ((f % n) + n) % n; t0 = performance.now() - frame / OUT.fps * 1000; $('#scrub').value = frame; dirty = true; }
+function hud() { const s = frame / OUT.fps; $('#hud').textContent = `${String(Math.floor(s / 60))}:${(s % 60).toFixed(2).padStart(5, '0')} · f ${frame + 1}/${nFrames()} · ${drawMs.toFixed(0)} ms`; }
+function loop(now) {
+  requestAnimationFrame(loop);
+  const n = nFrames();
+  if (playing) { const f = Math.floor(((now - t0) / 1000 * OUT.fps) % n); if (f !== frame) { frame = f; $('#scrub').value = f; dirty = true; } }
+  if (dirty) { const a = performance.now(); renderTo(cv, frame); drawMs = performance.now() - a; dirty = false; hud(); }
+}
+$('#play').onclick = () => { playing = !playing; $('#play').textContent = playing ? '❚❚' : '▶'; if (playing) t0 = performance.now() - frame / OUT.fps * 1000; };
+$('#scrub').oninput = e => setFrame(+e.target.value);
+$('#pq').value = String(prevH); $('#pq').onchange = e => { prevH = +e.target.value; resizePreview(); };
+addEventListener('keydown', e => {
+  if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName) && e.target.type !== 'range') return;
+  if (e.code === 'Space') { e.preventDefault(); $('#play').click(); }
+  else if (e.code === 'ArrowRight') { playing = false; $('#play').textContent = '▶'; setFrame(frame + 1); }
+  else if (e.code === 'ArrowLeft') { playing = false; $('#play').textContent = '▶'; setFrame(frame - 1); }
+});
+
+// ---------- API used by render.py (do not rename) ----------
+let rc = null;
+window.VIDEO_API = {
+  ready: false,
+  async prepare(job, w, h) {
+    applyJob(job); OUT.width = w; OUT.height = h;
+    if (VIDEO.init) await VIDEO.init(P, OUT, H);
+    if (document.fonts && document.fonts.ready) await document.fonts.ready;
+    rc = document.createElement('canvas'); rc.width = w; rc.height = h;
+    return { frames: nFrames(), fps: OUT.fps, duration: OUT.duration, app: VIDEO.id };
+  },
+  async renderFrame(i) { renderTo(rc, i); return rc.toDataURL('image/png').split(',')[1]; }
+};
+
+buildUI(); resizePreview(); syncScrub(); hud();
+if (!RENDER) requestAnimationFrame(loop);
+window.VIDEO_API.ready = true;
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,41 @@
+{
+  "schema": "html-video-job/1",
+  "app": "liquid-gradient-flow.html",
+  "name": "liquid-gradient-flow-aurora-silk",
+  "created": "2026-10-22T02:36:00.437Z",
+  "output": {
+    "width": 3840,
+    "height": 2160,
+    "fps": 30,
+    "duration": 10,
+    "crf": 14
+  },
+  "params": {
+    "seed": 1234,
+    "mode": "ribbons",
+    "palette": "aurora",
+    "blend": "lighter",
+    "useCustom": false,
+    "bg": "#050816",
+    "c1": "#00f5a0",
+    "c2": "#00d9f5",
+    "c3": "#7b61ff",
+    "c4": "#ff5ccf",
+    "count": 7,
+    "size": 1.1,
+    "soft": 0.6,
+    "cycles": 1,
+    "amp": 0.9,
+    "wobble": 0.5,
+    "breath": 0.05,
+    "rays": 0.35,
+    "bokeh": 30,
+    "bokehSize": 1,
+    "bokehOpacity": 0.5,
+    "bloom": 0.22,
+    "vignette": 0.35,
+    "grain": 0.16,
+    "grainSize": 0.8,
+    "grainChroma": 0.15
+  }
+}
