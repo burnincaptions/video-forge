@@ -1,0 +1,108 @@
+name: Render videos
+
+# Two ways to start a render:
+#   1. Upload / commit a job file into  jobs/  (automatic)
+#   2. Actions tab -> "Render videos" -> Run workflow -> type the job path, e.g. jobs/my-video.json
+on:
+  push:
+    paths:
+      - "jobs/**"
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "Job file to render, e.g. jobs/my-video.json"
+        required: true
+        type: string
+      draft:
+        description: "Draft mode: half resolution + fast encode (for quick tests)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+      any: ${{ steps.m.outputs.any }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Find job files to render
+        id: m
+        env:
+          EVENT: ${{ github.event_name }}
+          JOB_INPUT: ${{ inputs.job }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess
+          ev = os.environ["EVENT"]
+          files = []
+          if ev == "workflow_dispatch":
+              files = [os.environ["JOB_INPUT"].strip()]
+          else:
+              before, sha = os.environ.get("BEFORE", ""), os.environ["SHA"]
+              def run(cmd):
+                  return subprocess.run(cmd, capture_output=True, text=True)
+              r = None
+              if before and set(before) != {"0"}:
+                  r = run(["git", "diff", "--name-only", "--diff-filter=AM", before, sha, "--", "jobs"])
+              if r is None or r.returncode != 0:
+                  r = run(["git", "diff-tree", "--no-commit-id", "--name-only", "-r", "--diff-filter=AM", sha])
+              files = [f for f in r.stdout.split("\n") if f.startswith("jobs/") and f.endswith(".json")]
+          files = [f for f in files if os.path.isfile(f)]
+          for f in files:
+              print("will render:", f)
+          if not files:
+              print("No job files to render.")
+          include = [{"job": f, "name": os.path.splitext(os.path.basename(f))[0]} for f in files]
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write("matrix=" + json.dumps({"include": include}) + "\n")
+              out.write("any=" + ("true" if files else "false") + "\n")
+          PY
+
+  render:
+    needs: plan
+    if: needs.plan.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 350          # GitHub's hard limit is 360
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install renderer
+        run: |
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+          command -v ffmpeg >/dev/null || sudo apt-get install -y ffmpeg
+          ffmpeg -version | head -1
+          nproc
+
+      - name: Render ${{ matrix.name }}
+        env:
+          JOB: ${{ matrix.job }}
+          DRAFT: ${{ inputs.draft && '--draft' || '' }}
+        run: python render.py "$JOB" --out out $DRAFT
+
+      - name: Upload video
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-${{ matrix.name }}
+          path: out/*
+          if-no-files-found: error
+          compression-level: 0     # mp4 is already compressed
+          retention-days: 14
